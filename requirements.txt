@@ -1,0 +1,32 @@
+# Document Processing
+pypdf[crypto]
+langchain-text-splitters
+PyMuPDF
+python-docx
+Pillow
+transformers
+
+# Vector Database & Embeddings
+faiss-cpu
+ollama
+sentence-transformers
+numpy
+
+# LLM & Orchestration
+langchain
+langchain-community
+langchain-xai
+langchain-groq
+python-dotenv
+
+# Generative AI (Optional if using Gemini as well)
+google-generativeai
+streamlit
+
+# Audio Processing
+openai-whisper
+sounddevice
+
+# Additional Dependencies
+torch
+requests
