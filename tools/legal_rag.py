@@ -5,6 +5,8 @@ import numpy as np
 from langchain_groq import ChatGroq
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+import string
+from rank_bm25 import BM25Okapi
 
 load_dotenv()
 
@@ -20,6 +22,16 @@ def load_local_assets(index_dir="faiss_index"):
 
 # Pre-load assets
 VECTOR_INDEX, TEXT_CHUNKS = load_local_assets()
+
+def tokenize_for_bm25(text):
+    if not text:
+        return []
+    # simple lowercase and remove punctuation
+    text = text.lower().translate(str.maketrans('', '', string.punctuation))
+    return text.split()
+
+tokenized_corpus = [tokenize_for_bm25(chunk['text']) for chunk in TEXT_CHUNKS]
+BM25_INDEX = BM25Okapi(tokenized_corpus)
 
 def build_prompt(context, query, is_fallback=False):
     fallback_note = (
@@ -91,6 +103,35 @@ def retrieve_context_with_threshold(prompt_embedding, k=6, threshold=0.70):
     return retrieved_text, list(set(sources))
 # ------------------------------------------
 
+def retrieve_bm25_with_top_k(query, k=6):
+    """Search BM25 index and return the PARENT context for the found children."""
+    tokenized_query = tokenize_for_bm25(query)
+    scores = BM25_INDEX.get_scores(tokenized_query)
+    
+    # Get top k indices
+    top_k_indices = np.argsort(scores)[::-1][:k]
+    
+    retrieved_text = ""
+    sources = []
+    seen_parents = set()
+    
+    for idx in top_k_indices:
+        score = scores[idx]
+        if score <= 0: # Ignore zero scores
+            continue
+            
+        chunk = TEXT_CHUNKS[idx]
+        parent_id = chunk['metadata'].get('parent_id')
+        parent_text = chunk['metadata'].get('parent_text', chunk['text'])
+        
+        # Deduplication: Only add the parent if we haven't added it yet
+        if parent_id not in seen_parents:
+            retrieved_text += f"\n[Source: {chunk['metadata']['source']} | Confidence (BM25): {score:.2f}]\n{parent_text}\n"
+            sources.append(chunk['metadata']['source'])
+            seen_parents.add(parent_id)
+            
+    return retrieved_text, list(set(sources))
+
 def hyde_embedding(query, llm):
     hyde_prompt = f"Write a hypothetical legal answer to: {query}"
     hyde_answer = llm.invoke(hyde_prompt).content
@@ -112,8 +153,16 @@ def retrieve_with_hyde_and_expansion(query, llm, threshold=0.70, k=6):
     expanded_embs = [get_query_embedding(eq) for eq in expanded_queries]
     
     contexts, sources = [], []
+    
+    # 1. Vector Search
     for emb in [prompt_emb, hyde_emb] + expanded_embs:
         ctx, src = retrieve_context_with_threshold(emb, k=k, threshold=threshold)
+        contexts.append(ctx)
+        sources.extend(src)
+        
+    # 2. BM25 Keyword Search
+    for q in [query] + expanded_queries:
+        ctx, src = retrieve_bm25_with_top_k(q, k=k)
         contexts.append(ctx)
         sources.extend(src)
     
